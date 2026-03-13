@@ -1,0 +1,571 @@
+!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Health Status Check-In</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        body { font-family: 'Pretendard', sans-serif; }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease-out forwards;
+        }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #2563eb;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        /* 스크롤바 커스텀 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-100">
+    <div id="root"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, query, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.FirebaseOps = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, doc, setDoc, addDoc, onSnapshot, query, deleteDoc, serverTimestamp };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- 날짜 포맷 헬퍼 함수 ---
+        const getLocalDateString = (d = new Date()) => {
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        // --- 아이콘 컴포넌트 ---
+        const Icon = ({ name, className = "w-6 h-6" }) => {
+            const icons = {
+                Activity: <path d="M22 12 18 12 15 21 9 3 6 12 2 12" />,
+                UserCheck: <g><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="8.5" cy="7" r="4" /><polyline points="17 11 19 13 23 9" /></g>,
+                Hospital: <g><rect x="2" y="7" width="20" height="14" rx="2" ry="2" /><path d="M2 7h20" /><path d="M12 7v10" /><path d="M7 12h10" /><path d="M12 3v4" /></g>,
+                School: <g><path d="M22 10v6M2 10l10-5 10 5-10 5z" /><path d="M6 12v5c3 3 9 3 12 0v-5" /></g>,
+                CheckCircle: <g><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></g>,
+                RefreshCcw: <g><path d="M3 2v6h6" /><path d="M21 12A9 9 0 0 0 6 5.3L3 8" /><path d="M21 22v-6h-6" /><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7" /></g>,
+                FileText: <g><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></g>,
+                Lock: <g><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></g>,
+                AlertCircle: <g><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></g>,
+                Star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />,
+                Trash2: <g><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></g>,
+                ChevronLeft: <polyline points="15 18 9 12 15 6" />,
+                ChevronRight: <polyline points="9 18 15 12 9 6" />,
+                Filter: <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />,
+                BarChart: <g><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></g>
+            };
+            return (
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                    {icons[name]}
+                </svg>
+            );
+        };
+
+        const ADMIN_PASSWORD = "2693"; 
+
+        const App = () => {
+            const [viewMode, setViewMode] = useState('STUDENT'); 
+            const [user, setUser] = useState(null);
+            const [db, setDb] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+            const [submissions, setSubmissions] = useState([]);
+            const [adminPasswordInput, setAdminPasswordInput] = useState('');
+            const [currentTime, setCurrentTime] = useState(new Date());
+
+            // --- 학생 입력 상태 ---
+            const [studentInfo, setStudentInfo] = useState({ school: '칠성고등학교', grade: '', classNum: '', number: '', name: '' });
+            const [selectedSymptoms, setSelectedSymptoms] = useState([]);
+            const [result, setResult] = useState(null);
+
+            // --- 관리자 추가 기능 상태 ---
+            const [filterDate, setFilterDate] = useState(getLocalDateString());
+            const [filterGrade, setFilterGrade] = useState('');
+            const [filterClass, setFilterClass] = useState('');
+            const [currentPage, setCurrentPage] = useState(1);
+            const ITEMS_PER_PAGE = 50;
+
+            const symptomsList = [
+                { id: 'cough', label: '기침', icon: '😷', isCritical: false },
+                { id: 'phlegm', label: '가래', icon: '🤧', isCritical: false },
+                { id: 'runnyNose', label: '콧물', icon: '💧', isCritical: false },
+                { id: 'soreThroat', label: '인후통', icon: '😫', isCritical: true },
+                { id: 'fever', label: '37.5도 이상 발열', icon: '🌡️', isCritical: true },
+                { id: 'chills', label: '오한', icon: '🥶', isCritical: true },
+                { id: 'diarrhea', label: '3회 이상 설사', icon: '🚽', isCritical: true },
+                { id: 'severeHeadache', label: '심한 두통/구토/복통', icon: '🤮', isCritical: true },
+                { id: 'none', label: '특별한 증상 없어요', icon: '😊', isCritical: false },
+            ];
+
+            // 1. Firebase Init
+            useEffect(() => {
+                const init = async () => {
+                    if (!window.FirebaseOps) return;
+                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore } = window.FirebaseOps;
+                    try {
+                        const firebaseConfig = JSON.parse(__firebase_config);
+                        const app = initializeApp(firebaseConfig);
+                        const auth = getAuth(app);
+                        const firestore = getFirestore(app);
+                        setDb(firestore);
+
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+
+                        onAuthStateChanged(auth, (u) => { setUser(u); setIsLoading(false); });
+                    } catch (err) { console.error(err); setIsLoading(false); }
+                };
+                init();
+                const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+                return () => clearInterval(timer);
+            }, []);
+
+            // 2. 실시간 데이터 리스너
+            useEffect(() => {
+                if (!user || !db) return;
+                const { collection, onSnapshot } = window.FirebaseOps;
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'health-check-app';
+                
+                const q = collection(db, 'artifacts', appId, 'public', 'data', 'submissions');
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                    setSubmissions(data);
+                });
+                return () => unsubscribe();
+            }, [user, db]);
+
+            // --- 관리자: 필터링 로직 ---
+            const filteredSubmissions = useMemo(() => {
+                return submissions.filter(s => {
+                    const matchDate = filterDate ? s.dateString === filterDate : true;
+                    const matchGrade = filterGrade ? s.studentInfo.grade === filterGrade : true;
+                    const matchClass = filterClass ? s.studentInfo.classNum === filterClass : true;
+                    return matchDate && matchGrade && matchClass;
+                });
+            }, [submissions, filterDate, filterGrade, filterClass]);
+
+            // --- 관리자: 통계 로직 ---
+            const stats = useMemo(() => {
+                return {
+                    total: filteredSubmissions.length,
+                    safe: filteredSubmissions.filter(s => s.status === 'SAFE').length,
+                    warning: filteredSubmissions.filter(s => s.status === 'WARNING').length,
+                    critical: filteredSubmissions.filter(s => s.status === 'CRITICAL').length,
+                };
+            }, [filteredSubmissions]);
+
+            // --- 관리자: 페이징 로직 ---
+            useEffect(() => { setCurrentPage(1); }, [filterDate, filterGrade, filterClass]); // 검색 조건 변경시 1페이지로
+            const totalPages = Math.max(1, Math.ceil(filteredSubmissions.length / ITEMS_PER_PAGE));
+            const currentData = filteredSubmissions.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+            // --- 관리자: 삭제 기능 ---
+            const deleteDocItem = async (id) => {
+                if(confirm('이 기록을 정말 삭제하시겠습니까?')) {
+                    const { doc, deleteDoc } = window.FirebaseOps;
+                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'health-check-app';
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'submissions', id));
+                }
+            };
+            const clearFilteredData = async () => {
+                if(filteredSubmissions.length === 0) return;
+                if(confirm(`현재 검색된 ${filteredSubmissions.length}건의 데이터를 모두 삭제하시겠습니까?\n(주의: 이 작업은 되돌릴 수 없습니다!)`)) {
+                    setIsLoading(true);
+                    const { doc, deleteDoc } = window.FirebaseOps;
+                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'health-check-app';
+                    try {
+                        await Promise.all(filteredSubmissions.map(s => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'submissions', s.id))));
+                        alert('삭제 완료되었습니다.');
+                    } catch(e) { console.error(e); }
+                    setIsLoading(false);
+                }
+            };
+
+            // --- 학생: 핸들러 ---
+            const handleInfoChange = (e) => {
+                const { name, value } = e.target;
+                let val = value;
+                if (name === 'grade' || name === 'classNum') val = value.slice(0, 1);
+                if (name === 'number') val = value.slice(0, 2);
+                setStudentInfo(prev => ({ ...prev, [name]: val }));
+            };
+
+            const toggleSymptom = (id) => {
+                if (id === 'none') {
+                    setSelectedSymptoms(['none']);
+                } else {
+                    setSelectedSymptoms(prev => {
+                        const filtered = prev.filter(s => s !== 'none');
+                        return filtered.includes(id) ? filtered.filter(s => s !== id) : [...filtered, id];
+                    });
+                }
+            };
+
+            const submitCheck = async () => {
+                if (!studentInfo.name || !studentInfo.grade || !studentInfo.classNum || !studentInfo.number) {
+                    alert('학생 정보를 모두 입력해주세요.'); return;
+                }
+
+                const hasCritical = selectedSymptoms.some(id => symptomsList.find(s => s.id === id)?.isCritical);
+                let finalResult;
+
+                if (selectedSymptoms.length === 0 || selectedSymptoms.includes('none')) {
+                    finalResult = {
+                        status: 'SAFE', title: '정상 (등교 가능)',
+                        message: '오늘도 건강하게 즐거운 학교생활 하세요',
+                        color: 'bg-green-100 text-green-800 border-green-300', icon: 'School', showImmunityTips: true
+                    };
+                } else if (hasCritical) {
+                    finalResult = {
+                        status: 'CRITICAL', title: '병원 진료 권고',
+                        message: '주요 증상이 감지되었습니다. 담임선생님께 먼저 연락을 드린 후 병원 진료를 보고 등교하세요.',
+                        color: 'bg-red-100 text-red-800 border-red-300', icon: 'Hospital', showInstructions: true
+                    };
+                } else {
+                    finalResult = {
+                        status: 'WARNING', title: '주의 (등교 가능)',
+                        message: '경미한 증상이 있습니다. 마스크를 착용하고 상태를 지켜봐주세요.',
+                        color: 'bg-yellow-100 text-yellow-800 border-yellow-300', icon: 'UserCheck'
+                    };
+                }
+
+                setResult(finalResult);
+
+                if (db && user) {
+                    const { collection, addDoc, serverTimestamp } = window.FirebaseOps;
+                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'health-check-app';
+                    try {
+                        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'submissions'), {
+                            studentInfo,
+                            symptoms: selectedSymptoms.map(id => symptomsList.find(s => s.id === id).label),
+                            result: finalResult.title,
+                            status: finalResult.status,
+                            createdAt: serverTimestamp(),
+                            displayDate: new Date().toLocaleString('ko-KR'),
+                            dateString: getLocalDateString() // 검색 필터링용 날짜 텍스트
+                        });
+                    } catch (e) { console.error(e); }
+                }
+            };
+
+            const downloadExcel = () => {
+                if (filteredSubmissions.length === 0) { alert('다운로드할 데이터가 없습니다.'); return; }
+                const exportData = filteredSubmissions.map(s => ({
+                    '일시': s.displayDate, '이름': s.studentInfo.name, '학년': s.studentInfo.grade,
+                    '반': s.studentInfo.classNum, '번호': s.studentInfo.number, '판정': s.result, '증상': s.symptoms.join(', ')
+                }));
+                const ws = XLSX.utils.json_to_sheet(exportData);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "건강상태기록");
+                XLSX.writeFile(wb, `건강상태_검색결과_${new Date().toLocaleDateString()}.xlsx`);
+            };
+
+            if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-100"><div className="loading-spinner"></div></div>;
+
+            return (
+                <div className="min-h-screen bg-slate-100 p-4 md:p-8 flex flex-col items-center">
+                    <div className="w-full max-w-5xl flex justify-end mb-4">
+                        {viewMode === 'STUDENT' ? (
+                            <button onClick={() => setViewMode('ADMIN_LOGIN')} className="p-2 bg-white rounded-full shadow hover:bg-gray-50 text-gray-400">
+                                <Icon name="Lock" className="w-5 h-5" />
+                            </button>
+                        ) : (
+                            <button onClick={() => setViewMode('STUDENT')} className="px-4 py-2 bg-white rounded-full shadow text-sm font-bold text-gray-600 flex items-center gap-1">
+                                <Icon name="ChevronLeft" className="w-4 h-4" /> 학생 화면으로
+                            </button>
+                        )}
+                    </div>
+
+                    {/* ================= STUDENT MODE ================= */}
+                    {viewMode === 'STUDENT' && (
+                        <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden animate-fade-in-up">
+                            <div className="bg-blue-600 p-8 text-center text-white">
+                                <Icon name="Activity" className="w-12 h-12 mx-auto mb-4" />
+                                <h1 className="text-2xl font-bold tracking-tight">Daily Health Status Check-In</h1>
+                                <p className="text-blue-50 mt-1 font-bold text-lg">데일리 건강 체크인</p>
+                                <p className="text-blue-200 mt-2 text-xs">{currentTime.toLocaleDateString()} {currentTime.toLocaleTimeString()}</p>
+                            </div>
+
+                            <div className="p-6">
+                                {!result ? (
+                                    <>
+                                        <div className="space-y-4 mb-8">
+                                            <input type="text" value="칠성고등학교" readOnly className="w-full p-3 border rounded-xl text-center bg-gray-100 text-gray-600 font-bold outline-none cursor-default select-none" />
+                                            <div className="grid grid-cols-3 gap-2">
+                                                <input type="number" name="grade" placeholder="학년" value={studentInfo.grade} onChange={handleInfoChange} className="p-3 border rounded-xl text-center focus:ring-2 focus:ring-blue-500 outline-none" />
+                                                <input type="number" name="classNum" placeholder="반" value={studentInfo.classNum} onChange={handleInfoChange} className="p-3 border rounded-xl text-center focus:ring-2 focus:ring-blue-500 outline-none" />
+                                                <input type="number" name="number" placeholder="번호" value={studentInfo.number} onChange={handleInfoChange} className="p-3 border rounded-xl text-center focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            </div>
+                                            <input type="text" name="name" placeholder="학생 이름" value={studentInfo.name} onChange={handleInfoChange} className="w-full p-3 border rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                                        </div>
+
+                                        <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
+                                            <Icon name="AlertCircle" className="w-4 h-4" /> 현재 증상을 선택하세요
+                                        </h3>
+                                        <div className="grid grid-cols-2 gap-3 mb-8">
+                                            {symptomsList.map(s => (
+                                                <button 
+                                                    key={s.id} onClick={() => toggleSymptom(s.id)}
+                                                    className={`p-4 rounded-2xl border-2 flex items-center justify-center transition-all ${
+                                                        selectedSymptoms.includes(s.id) ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-100 hover:bg-gray-50 text-gray-600'
+                                                    } ${s.id === 'none' ? 'col-span-2 flex-row gap-3 py-5' : 'flex-col gap-2'}`}
+                                                >
+                                                    <span className="text-2xl">{s.icon}</span>
+                                                    <span className="text-sm font-bold">{s.label}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <button onClick={submitCheck} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg shadow-lg hover:bg-blue-700 transition-colors">
+                                            자가진단 완료하기
+                                        </button>
+                                    </>
+                                ) : (
+                                    <div className="text-center animate-fade-in-up">
+                                        <div className={`p-6 rounded-3xl border-2 mb-6 ${result.color}`}>
+                                            <Icon name={result.icon} className="w-16 h-16 mx-auto mb-4" />
+                                            <h2 className="text-2xl font-black mb-2">{result.title}</h2>
+                                            <p className="font-medium leading-relaxed mb-4">{result.message}</p>
+                                            
+                                            {result.showInstructions && (
+                                                <div className="mt-4 pt-4 border-t border-red-200 text-left space-y-2 bg-white/50 p-4 rounded-xl">
+                                                    <p className="text-sm font-bold flex items-center gap-1 text-red-900">* 안내 사항</p>
+                                                    <div className="text-xs space-y-2 text-red-800 leading-relaxed font-semibold">
+                                                        <p>1. 병원 진료 후 병원 발급 <span className="underline text-red-900 font-bold">"진료확인서"</span>를 담임선생님께 제출하세요.</p>
+                                                        <p>2. 진료결과 <span className="underline text-red-900 font-bold">'법정감염병'</span>일 경우 <span className="font-bold">'출석인정 등교중지'</span> 처리됩니다.</p>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {result.showImmunityTips && (
+                                                <div className="mt-4 pt-4 border-t border-green-200 text-left space-y-1 bg-white/50 p-4 rounded-xl">
+                                                    <p className="text-sm font-bold text-green-900">* 면역력 유지, 증진하는 방법</p>
+                                                    <p className="text-xs text-green-800 font-semibold leading-relaxed">(규칙적인 식사, 적당한 운동, 6시간 이상 수면 등)</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <button onClick={() => {setResult(null); setSelectedSymptoms([]);}} className="text-gray-400 font-bold hover:underline">
+                                            다시 입력하기
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ================= ADMIN LOGIN ================= */}
+                    {viewMode === 'ADMIN_LOGIN' && (
+                        <div className="w-full max-w-sm bg-white p-8 rounded-3xl shadow-xl text-center animate-fade-in-up">
+                            <Icon name="Lock" className="w-10 h-10 mx-auto mb-4 text-blue-600" />
+                            <h2 className="text-xl font-bold mb-6">관리자 인증</h2>
+                            <input 
+                                type="password" placeholder="비밀번호 (1234)" value={adminPasswordInput}
+                                onChange={(e) => setAdminPasswordInput(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && (adminPasswordInput === ADMIN_PASSWORD ? setViewMode('ADMIN_DASHBOARD') : alert('비밀번호 오류'))}
+                                className="w-full p-3 border rounded-xl mb-4 text-center focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                            <button 
+                                onClick={() => adminPasswordInput === ADMIN_PASSWORD ? setViewMode('ADMIN_DASHBOARD') : alert('비밀번호 오류')}
+                                className="w-full py-3 bg-gray-800 text-white rounded-xl font-bold hover:bg-gray-900"
+                            >
+                                로그인
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ================= ADMIN DASHBOARD ================= */}
+                    {viewMode === 'ADMIN_DASHBOARD' && (
+                        <div className="w-full max-w-5xl bg-gray-50 rounded-3xl shadow-xl overflow-hidden animate-fade-in-up flex flex-col h-[85vh]">
+                            
+                            {/* 헤더 */}
+                            <div className="p-6 bg-gray-800 text-white flex justify-between items-center shrink-0">
+                                <div>
+                                    <h2 className="text-xl font-bold flex items-center gap-2"><Icon name="Activity" /> 건강상태 관리 대시보드</h2>
+                                    <p className="text-gray-400 text-sm mt-1">실시간 데이터 모니터링 및 관리</p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={downloadExcel} className="px-4 py-2 bg-green-600 rounded-lg text-sm font-bold hover:bg-green-700 flex items-center gap-1 shadow-md">
+                                        엑셀 다운로드
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="p-6 flex-1 overflow-auto flex flex-col gap-6">
+                                
+                                {/* 통계 위젯 (Feature 2) */}
+                                <div className="grid grid-cols-4 gap-4 shrink-0">
+                                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center justify-center">
+                                        <span className="text-gray-400 text-xs font-bold mb-1 uppercase tracking-wider">조회된 참여자</span>
+                                        <span className="text-3xl font-black text-blue-600">{stats.total}</span>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-green-100 flex flex-col items-center justify-center">
+                                        <span className="text-green-500 text-xs font-bold mb-1 uppercase tracking-wider">정상 등교</span>
+                                        <span className="text-3xl font-black text-green-600">{stats.safe}</span>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-yellow-100 flex flex-col items-center justify-center">
+                                        <span className="text-yellow-500 text-xs font-bold mb-1 uppercase tracking-wider">주의 관찰</span>
+                                        <span className="text-3xl font-black text-yellow-600">{stats.warning}</span>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-red-100 flex flex-col items-center justify-center">
+                                        <span className="text-red-500 text-xs font-bold mb-1 uppercase tracking-wider">병원 진료</span>
+                                        <span className="text-3xl font-black text-red-600">{stats.critical}</span>
+                                    </div>
+                                </div>
+
+                                {/* 필터 및 컨트롤 바 (Feature 1 & 3) */}
+                                <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-wrap justify-between items-end gap-4 shrink-0">
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <div className="flex items-center gap-2 text-gray-500 font-bold text-sm">
+                                            <Icon name="Filter" className="w-5 h-5" /> 검색 필터:
+                                        </div>
+                                        <input 
+                                            type="date" 
+                                            value={filterDate} 
+                                            onChange={(e) => setFilterDate(e.target.value)} 
+                                            className="px-3 py-2 border rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                        <select 
+                                            value={filterGrade} 
+                                            onChange={(e) => setFilterGrade(e.target.value)} 
+                                            className="px-3 py-2 border rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                                        >
+                                            <option value="">전체 학년</option>
+                                            {[1,2,3,4,5,6].map(g => <option key={g} value={g}>{g}학년</option>)}
+                                        </select>
+                                        <select 
+                                            value={filterClass} 
+                                            onChange={(e) => setFilterClass(e.target.value)} 
+                                            className="px-3 py-2 border rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                                        >
+                                            <option value="">전체 반</option>
+                                            {[1,2,3,4,5,6,7,8,9,10,11,12].map(c => <option key={c} value={c}>{c}반</option>)}
+                                        </select>
+                                        <button onClick={() => {setFilterDate(''); setFilterGrade(''); setFilterClass('');}} className="px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg font-bold transition-colors">
+                                            초기화
+                                        </button>
+                                    </div>
+                                    
+                                    <div>
+                                        <button onClick={clearFilteredData} className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm font-bold hover:bg-red-100 flex items-center gap-1 transition-colors">
+                                            <Icon name="Trash2" className="w-4 h-4" /> 검색된 {stats.total}건 전체삭제
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* 데이터 테이블 */}
+                                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex-1 flex flex-col">
+                                    <div className="overflow-auto flex-1">
+                                        <table className="w-full text-left relative">
+                                            <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
+                                                <tr>
+                                                    <th className="p-4 text-xs font-bold text-gray-500 uppercase whitespace-nowrap">일시</th>
+                                                    <th className="p-4 text-xs font-bold text-gray-500 uppercase whitespace-nowrap">대상자</th>
+                                                    <th className="p-4 text-xs font-bold text-gray-500 uppercase whitespace-nowrap">판정결과</th>
+                                                    <th className="p-4 text-xs font-bold text-gray-500 uppercase">증상내용</th>
+                                                    <th className="p-4 text-xs font-bold text-gray-500 uppercase text-center w-16">관리</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {currentData.length > 0 ? currentData.map(s => (
+                                                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                                                        <td className="p-4 text-sm text-gray-500 whitespace-nowrap">{s.displayDate}</td>
+                                                        <td className="p-4 whitespace-nowrap">
+                                                            <span className="font-bold text-gray-900">{s.studentInfo.name}</span>
+                                                            <span className="ml-2 text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-md">
+                                                                {s.studentInfo.grade}-{s.studentInfo.classNum}-{s.studentInfo.number}
+                                                            </span>
+                                                        </td>
+                                                        <td className="p-4 whitespace-nowrap">
+                                                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                                                                s.status === 'SAFE' ? 'bg-green-100 text-green-700' : 
+                                                                s.status === 'CRITICAL' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                                                            }`}>
+                                                                {s.result}
+                                                            </span>
+                                                        </td>
+                                                        <td className="p-4 text-sm text-gray-600">{s.symptoms?.length > 0 ? s.symptoms.join(', ') : '-'}</td>
+                                                        <td className="p-4 text-center">
+                                                            <button onClick={() => deleteDocItem(s.id)} className="text-gray-300 hover:text-red-500 transition-colors" title="삭제">
+                                                                <Icon name="Trash2" className="w-5 h-5 mx-auto" />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                )) : (
+                                                    <tr><td colSpan="5" className="p-10 text-center text-gray-400 font-medium">검색 조건에 일치하는 데이터가 없습니다.</td></tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    {/* 페이징 처리 (Feature 4) */}
+                                    {totalPages > 1 && (
+                                        <div className="bg-slate-50 p-3 border-t flex justify-center items-center gap-4 shrink-0">
+                                            <button 
+                                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                                disabled={currentPage === 1}
+                                                className="p-1 rounded-lg hover:bg-gray-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                                            >
+                                                <Icon name="ChevronLeft" className="w-5 h-5" />
+                                            </button>
+                                            <span className="text-sm font-bold text-gray-600">
+                                                <span className="text-blue-600">{currentPage}</span> / {totalPages}
+                                            </span>
+                                            <button 
+                                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                                disabled={currentPage === totalPages}
+                                                className="p-1 rounded-lg hover:bg-gray-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                                            >
+                                                <Icon name="ChevronRight" className="w-5 h-5" />
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ================= 저작권 및 제작자 표시 푸터 ================= */}
+                    <div className="mt-8 text-center text-slate-400 font-medium text-sm animate-fade-in-up">
+                        <p>© 2026 칠성고등학교 [보건교사 서영숙]. All rights reserved.</p>
+                        <p className="text-xs mt-1">본 시스템은 칠성고등학교 학생들의 건강 관리를 위해 창작되었습니다.</p>
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
